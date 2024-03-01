@@ -2,10 +2,137 @@
 title: "Predicting EV Price"
 ---
 
-## Quarto
+\scriptsize
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+# Introduction
+In this project, I will be creating a model to predict the prices of electric vehicles (in USD) based on variables such as battery capacity, acceleration, top speed, range, efficiency, fast charge speed, drive, and number of seats.
+```{r, echo=F, warning=F,message=F}
+library(tidyverse)
+library(car)
 
-```{r}
-1 + 1
+## Load data
+
+ev_cars <- read.csv('ev_cars_tidy.csv')
+ev_cars <- as_tibble(ev_cars)
+
+## Clean up data
+
+# remove irrelevant variables and faulty observations
+
+ev_cars <- ev_cars[,c(-1,-2,-11,-12)] # remove name (irrelevant), remove ev_type (all the same value) , price in germany, and price in uk (ee are only comparing US prices)
+
+# clean up categorical variable 'drive' 1: all wheel drive, 2: front wheel drive, 3: rear wheel drive
+
+ev_cars$drive <- as.numeric(as.factor(ev_cars$drive))
+
+# Cleaned Data
+
+ev_cars <- readr::type_convert(ev_cars)
+
 ```
+
+# Data Description
+
+This dataset has 177 observations with 9 variables.
+1. Battery Capacity (numeric) 2. Acceleration (numeric) 3. Top Speed (numeric) 4. Range (numeric) 5. Efficiency (numeric) 6. Fast Charge Speed (numeric) 7. Drive (categorical) 8. Number of Seats (categorical) 9. Price in USD (numeric)
+
+## Head of Dataset
+```{r, echo=F, warning=F,message=F}
+head(ev_cars)
+```
+
+\tiny
+## Dataset Summary
+```{r, echo=F, warning=F,message=F}
+options(width = 180)
+summary(ev_cars)
+```
+
+
+## Correlation Matrix (includes Y)
+```{r, echo=F, warning=F,message=F}
+options(width = 180)
+cor(ev_cars)
+```
+\scriptsize
+## Linearity of Y v. Predictors
+```{r, echo=F, warning=F,message=F}
+ev_cars  %>% pairs()
+```
+
+## Distribution of Predictors + Y
+```{r, echo=F, warning=F,message=F}
+par(mfrow=c(3, 3))
+for (i in 1:8) {
+  boxplot(ev_cars[i], horizontal=TRUE, main=names(ev_cars[i]))
+}
+```
+
+# Model(s)
+
+## Model 1 (Full Model, No Transformations)
+price_in_us ~ (battery_capacity + acceleration + top_speed + range + efficiency + fast_charge_speed + drive + number_of_seats
+```{r,warning=F,message=F,echo=F}
+
+
+# full model, no transformations
+m1 <- lm(price_in_us ~ (battery_capacity+acceleration+top_speed+range+efficiency+fast_charge_speed+drive+number_of_seats), data=ev_cars)
+summary(m1)
+
+par(mfrow=c(2,2))
+plot(m1)
+powerTransform(cbind(ev_cars$price_in_us, ev_cars$battery_capacity, ev_cars$acceleration, ev_cars$top_speed, ev_cars$range, ev_cars$efficiency, ev_cars$fast_charge_speed, ev_cars$drive, ev_cars$number_of_seats)~1) %>%
+  summary
+```
+The first model is a simple linear regression model that includes the following variables as predictors for price_in_us with no transformation to both X nor Y: battery_capacity, acceleration, top_speed, range, efficiency, fast_charge_speed, drive, and number_of_seats. The summary of this model tells us that the fast_charge_speed is a statistically insignificant predictor of price, given by its high p-value (0.779950). It is also worth noting that the adjusted R squared is 0.7854, meaning that around 78.5% of the variance in the price_in_us variable can be explained by the predictors. From the diagnostic plots, although there is no non-linear pattern in the residuals plot, there is a slight showing of heteroscedasticity in the Residuals vs Fitted plot. The Normal Q-Q plot suggests that despite the presence of a few points that appear to need further investigation, the residuals are generally normally distributed. Another notable observation is the presence of high leverage points (Ex: Point 59) and outliers (Ex: Point 19) in the Residuals vs Leverage plot. From these key takeaways, it can be concluded that a transformation of variables may be necessary.
+
+## Model 2
+price_in_us^(-0.5) ~ log(battery_capacity) + acceleration^(0.5) + 1/top_speed + log(efficiency) + log(range) + log(drive) + 1/number_of_seats
+```{r,message=F,warning=F,echo=F}
+
+### Transformations via boxcox 
+t_price <- ev_cars$price_in_us^-0.5
+t_bat <- log(ev_cars$battery_capacity)
+t_acc <- (ev_cars$acceleration)^0.5
+t_tspeed <- 1/(ev_cars$top_speed)
+t_range <- log(ev_cars$range)
+t_eff <- log(ev_cars$efficiency)
+t_drive <- log(ev_cars$drive)
+t_seats <- 1/(ev_cars$number_of_seats)
+
+# m2, full model w/ transformations
+t_full <- lm(t_price~t_bat+t_acc+t_tspeed+t_range+t_eff+t_drive+t_seats)
+summary(t_full)
+```
+The second linear regression model includes the following transformed variables as predictors for the inverse square-root of price_in_us: log of battery_capacity, square root of acceleration, inverse of top_speed, log of efficiency, log of range, log of drive, and the inverse of number_of_seats. All their corresponding powers are determined by the estimated powers of the Box-Cox transformation. Though the model’s p-value is below 005 (<2.2e-16), its adjusted R-squared value is 0.7567 and the model summary shows that there aretwo transformed variables that are not statistically significant: acceleration and number of seats. Even with transformations applied to every variable, it is worth noting that the best course of action is to perform variable selection in order to make a more appropriate model.
+
+
+## Model 3 (Final and Best Model with Lowest AIC)
+price_in_us^(-0.5) ~ log(battery_capacity) + log(range) + 1/top_speed + log(efficiency)
+
+### Backwards AIC
+```{r,message=F,warning=F,echo=F}
+
+# stepwise regressions
+backAIC <- step(t_full, direction='backward')
+```
+### Forward AIC
+```{r,message=F,warning=F,echo=F}
+mint <- lm(t_price~1)
+forwardAIC <- step(mint, scope=list(lower=~1, 
+                                    upper=~t_bat+t_range+t_acc+t_range+t_eff+t_tspeed),
+                   direction='forward')
+```
+
+### Final Model
+```{r,message=F,warning=F,echo=F}
+# best model (lowest AIC)
+m3 <- lm(t_price~t_bat+t_range+t_tspeed+t_eff)
+summary(m3)
+
+# m3 model diagnostics
+par(mfrow=c(2,2))
+plot(m3)
+```
+
+After variable selection, Model 3 is seen to be our “best” predictive model, as this model reduces the number of predictor variables to prevent overfitting the data as well as removing many predictor variables that were identified as victims of multicollinearity. Moreover, all of the predictor variables in this model are significant while also not violating the model assumptions. Additionally, our high R2 value indicates a good fit of the model to the data and the F - test for overall model significance gives a p - value close to 0, indicating that the final model is valid. Looking at the diagnostic plots, one can see that the final model has relatively constant variance across its fitted values. Also, the Normal Q-Q plot follows a relatively linear trend, which indicates that the model assumption of Normality is satisfied as well. It is worth noting that observation 19 is an extreme outlier in our diagnostic plots and, thus, does stray heavily from the overall model pattern; however, there is little that can be done besides removing this observation from the data, as it is an extreme outlier of the data, with a standardized residual value close to -8. Even transforming the data could do little to fix the extremeness of this data point.
